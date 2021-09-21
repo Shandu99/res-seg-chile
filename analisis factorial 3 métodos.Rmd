@@ -1,0 +1,243 @@
+---
+title: "Análisis Factorial de índices de segregación de comunas chilenas"
+output: 
+---
+
+```{r message=F, warning=F}
+rm(list = ls()); gc()
+library(tidyverse)
+library(psych)
+library(e1071)
+library("paran")
+library("relimp", pos = 4)
+```
+
+# Datos
+
+```{r}
+load("matriz indices seg mayores25.RData")
+load("DB nedu zona censal mayores25.RData")
+comunas <- levels(as.factor(educ$comuna))
+```
+
+# Estadística descriptiva
+
+```{r}
+indice <- seq(1:20)
+nombre <- c(  
+  # Uneveness
+     "Dissimilarity",
+     "Giny", 
+     "Entropy", 
+     "Atkinson (b = 0.1)",
+     "Atkinson (b = 0.5)",
+     "Atkinson (b = 0.9)",
+  # Exposure
+     "Interaction",
+     "Isolation",
+     "Correlation", 
+  # Concentration
+     "Delta", 
+     "Absolute concentration",
+     "Relative concentration",
+  # Centralization
+     "Proportion in central city", 
+     "Absolute centralization", 
+     "Relative centralization", 
+  # Clustering
+     "Absolute clustering", 
+     "Spatial proximity", 
+     "Relative clustering", 
+     "Distance decay interaction",
+     "Distance decay isolation" 
+)
+datos <- data.frame(res)
+mean <- round(as.numeric(lapply(datos, mean, na.rm = TRUE)), digits = 4)
+median <- round(as.numeric(lapply(datos, median, na.rm = TRUE)), digits = 4)
+min <- round(as.numeric(lapply(datos, min, na.rm = TRUE)), digits = 4)
+max <- round(as.numeric(lapply(datos, max, na.rm = TRUE)), digits = 4)
+sd <- round(as.numeric(lapply(datos, sd, na.rm = TRUE)), digits = 4)
+skewness <- round(as.numeric(lapply(datos, skewness, na.rm = TRUE)), digits = 4)
+kurtosis <- round(as.numeric(lapply(datos, kurtosis, na.rm = TRUE)), digits = 4)
+n <- nrow(datos) - colSums(is.na(datos)) 
+  
+tabla <- cbind(indice, nombre, min, mean, median, max, sd, skewness, kurtosis, n)
+colnames(tabla) <- c("Índice", "Nombre", "Mínimo", "Media", "Mediana", "Máximo", "Desviación estándar", "Asimetría", "Curtosis", "Número de comunas")
+rownames(tabla) <- rep("", 20)
+
+knitr::kable(tabla)
+
+rm(datos)
+```
+
+# Matriz de correlación
+
+```{r}
+mat.cor <- cor(res, use = "pairwise.complete.obs")
+
+mat.cor[upper.tri(mat.cor)] <- NA 
+diag(mat.cor) <- NA 
+mat.cor %>% round(3) %>% knitr::kable()
+
+#corrplot::corrplot.mixed(mat.cor)
+```
+
+# FA
+
+## Datos FA
+
+```{r}
+ind <- na.omit(res[,c(1:12,14,16:20)])
+colnames(ind) <- nombre[c(1:12,14,16:20)]
+```
+
+
+## principal axes - varimax
+```{r}
+fa.varimax <- fa(ind, nfactors = 5, rotate = "varimax", residuals = T, fm = "pa", 
+                 min.err = 0.001, max.iter = 50, cor = "cor", use = "pairwise", n.obs = T)
+
+vm.VCE <- sum(fa.varimax$values[c(1:5)])/fa.varimax$communalities ## % varianza comun explicada
+vm.VCEF1 <- fa.varimax$values[1]/sum(fa.varimax$communalities) ## % var comun explicada por F1
+vm.VCEF2 <- fa.varimax$values[2]/sum(fa.varimax$communalities) ## % var comun explicada por F2
+vm.VCEF3 <- fa.varimax$values[3]/sum(fa.varimax$communalities) ## % var comun explicada por F3
+vm.VCEF4 <- fa.varimax$values[4]/sum(fa.varimax$communalities) ## % var comun explicada por F4
+vm.VCEF5 <- fa.varimax$values[5]/sum(fa.varimax$communalities) ## % var comun explicada por F5
+
+```
+
+```{r}
+tabla.varimax.VCE <- cbind(round(100*vm.VCEF1, 1), round(100*vm.VCEF2, 1), round(100*vm.VCEF3, 1),
+                   round(100*vm.VCEF4, 1), round(100*vm.VCEF5, 1), round(100*vm.VCE, 1))
+
+colnames(tabla.varimax.VCE) <- c("Factor 1", "Factor 2", "Factor 3", "Factor 4", "Factor 5", "Total")
+rownames(tabla.varimax.VCE) <- c("Porcentaje (%)")
+
+knitr::kable(tabla.varimax.VCE)
+
+fa.varimax$Vaccounted
+```
+
+```{r}
+tabla.varimax <- cbind(round(fa.varimax$loadings, 3), round(fa.varimax$communality, 3))
+colnames(tabla.varimax) <- c("Factor 1", "Factor 2", "Factor 3", "Factor 4", "Factor 5", "Comunalidad")
+
+knitr::kable(tabla.varimax)
+```
+
+```{r fig.height=8, fig.width=8}
+fa.diagram(fa.varimax, cut = .3, digits = 2, marg = c(.5, .2, 1, .1), rsize = .3)
+```
+
+## principal axes - promax
+```{r}
+fa.promax <- fa(ind, nfactors = 5, rotate = "Promax", residuals = T, fm = "pa", 
+                 min.err = 0.001, max.iter = 50, cor = "cor", use = "pairwise", n.obs = T)
+
+pm.VCE <- sum(fa.promax$Vaccounted[1, c(1:5)])/fa.promax$communalities ## % varianza comun explicada
+pm.VCEF1 <- fa.promax$values[1]/sum(fa.promax$communalities) ## % var comun explicada por F1
+pm.VCEF2 <- fa.promax$values[2]/sum(fa.promax$communalities) ## % var comun explicada por F2
+pm.VCEF3 <- fa.promax$values[3]/sum(fa.promax$communalities) ## % var comun explicada por F3
+pm.VCEF4 <- fa.promax$values[4]/sum(fa.promax$communalities) ## % var comun explicada por F4
+pm.VCEF5 <- fa.promax$values[5]/sum(fa.promax$communalities) ## % var comun explicada por F5
+
+# Compute SS loadings
+SS <- colSums(fa.promax$Structure^2)
+# Compute percentage of explained variance by factor
+(SS/length(fa.promax$communality) *100) %>% round(1)
+# Total explained variability
+mean(fa.promax$communality)
+```
+
+```{r}
+tabla.promax.VCE <- cbind(round(100*pm.VCEF1, 1), round(100*pm.VCEF2, 1), round(100*pm.VCEF3, 1),
+                   round(100*pm.VCEF4, 1), round(100*pm.VCEF5, 1), round(100*pm.VCE, 1))
+
+colnames(tabla.promax.VCE) <- c("Factor 1", "Factor 2", "Factor 3", "Factor 4", "Factor 5", "Total")
+rownames(tabla.promax.VCE) <- c("Porcentaje (%)")
+
+knitr::kable(tabla.promax.VCE)
+
+(fa.promax$Vaccounted * 100)[4,] %>% round(1) 
+
+fa.promax$Phi %>% round(3)
+```
+
+```{r}
+tabla.promax <- cbind(round(fa.promax$loadings, 3), round(fa.promax$communality, 3))
+colnames(tabla.promax) <- c("Factor 1", "Factor 2", "Factor 3", "Factor 4", "Factor 5", "Comunalidad")
+
+knitr::kable(tabla.promax)
+```
+
+```{r fig.height=8, fig.width=8}
+fa.diagram(fa.promax, cut = .3, digits = 2, marg = c(.5, .2, 1, .1), rsize = .3)
+```
+
+
+
+## Cor FA principal axes varimax - principal axes promax
+```{r}
+fa.cor <- faCor(ind, nfactors = c(5,5), fm = c("pa", "pa"), rotate = c("varimax", "Promax"), 
+           cor = "cor", use = "pairwise")
+  
+fa.cor
+```
+## minrank - oblimin
+
+### Número óptimo de factores
+
+```{r, warning=FALSE, message=FALSE}
+pa_mean <- paran(ind, iterations = 1000, centile = 0, all = TRUE, cfa = TRUE,
+                 graph = TRUE, color = TRUE, col = "black", lty = 1, legend = FALSE)
+
+pa_p95 <- paran(ind, iterations = 1000, centile = 95, all = TRUE, cfa = TRUE,
+                graph = TRUE, color = TRUE, col = "black", lty = 1, legend = FALSE)
+```
+
+```{r}
+# Para verificar si da el mismo resultado
+pa_mean <- fa.parallel(ind, fm = "fa", fa = "fa", n.iter = 1000, SMC = TRUE,
+                        main = "Análisis paralelo, media")
+
+pa_p95 <- fa.parallel(ind, fm = "fa", fa = "fa", n.iter = 1000, quant = .95, SMC = TRUE,
+                       main = "Análisis paralelo, P95")
+```
+
+### AFE
+
+```{r, include=FALSE}
+segr.5f <- fa(ind, nfactors = 5, residuals = TRUE, rotate = "oblimin", 
+              min.err = 0.001, max.iter = 50, fm = "minrank", cor = "cor")
+
+VCE <- sum(segr.5f$values[c(1:5)])/sum(segr.5f$communalities) ## % varianza comun explicada
+VCEF1 <- segr.5f$values[1]/sum(segr.5f$communalities) ## % var comun explicada por F1
+VCEF2 <- segr.5f$values[2]/sum(segr.5f$communalities) ## % var comun explicada por F2
+VCEF3 <- segr.5f$values[3]/sum(segr.5f$communalities) ## % var comun explicada por F3
+VCEF4 <- segr.5f$values[4]/sum(segr.5f$communalities) ## % var comun explicada por F4
+VCEF5 <- segr.5f$values[5]/sum(segr.5f$communalities) ## % var comun explicada por F5
+```
+
+```{r}
+tabla.VCE <- cbind(round(100*VCEF1, 1), round(100*VCEF2, 1), round(100*VCEF3, 1),
+                   round(100*VCEF4, 1), round(100*VCEF5, 1), round(100*VCE, 1))
+
+colnames(tabla.VCE) <- c("Factor 1", "Factor 2", "Factor 3", "Factor 4", "Factor 5", "Total")
+rownames(tabla.VCE) <- c("Porcentaje (%)")
+
+knitr::kable(tabla.VCE)
+
+(segr.5f$Vaccounted*100) %>% round(1)
+```
+
+```{r}
+tabla.AFE5F <- cbind(round(segr.5f$loadings, 3), round(segr.5f$communality, 3))
+colnames(tabla.AFE5F) <- c("Factor 1", "Factor 2", "Factor 3", "Factor 4", "Factor 5", "Comunalidad")
+rownames(tabla.AFE5F) <- nombre[c(1:12, 14, 16:20)]
+  
+knitr::kable(tabla.AFE5F)
+```
+
+```{r fig.height=8, fig.width=8}
+fa.diagram(segr.5f, cut = .3, digits = 2, marg = c(.5, .2, 1, .1), rsize = .3)
+```
