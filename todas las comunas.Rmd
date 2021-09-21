@@ -1,0 +1,517 @@
+---
+title: "Construcción de matriz de índices de segregación por comuna"
+output: 
+---
+
+```{r message=F, warning=F}
+rm(list = ls())
+library(censo2017)
+library(chilemapas)
+library(tidyverse)
+library(sf)
+```
+
+# Data
+
+```{r eval = F}
+#CHUNK ÚTIL PARA CUANDO PODAMOS TAMBIÉN CONVERTIR LOS NOMBRES DE LAS ZONAS CENSALES
+#POR AHORA NO SE GANA NADA CON USARLO
+
+comunas_nomb <- tbl(censo_conectar(), "comunas") %>% 
+#  select(redcoden, nom_comuna) %>% 
+  rename(codigo_comuna_2017 = redcoden) %>% 
+  mutate(region_2017 = str_sub(codigo_comuna_2017, 1, 2),
+         provincia_2017 = str_sub(codigo_comuna_2017, 1, 3)) %>% 
+  filter(provincia_2017 == "084") %>% 
+  collect
+
+comunas_nomb$codigo_comuna <- c("16101", "16102", "16202", "16203", "16302", "16103", "16104", "16204", "16303", "16105", "16106", "16205", "16107", "16201", "16206", "16301", "16304", "16108", "16305", "16207", "16109")
+
+comunas_mapa <- mapa_comunas %>% 
+  mutate(codigo_comuna = ifelse(codigo_comuna %in% comunas_nomb$codigo_comuna, 
+                                comunas_nomb$codigo_comuna_2017, codigo_comuna),
+         codigo_provincia = ifelse(codigo_provincia %in% c("161", "162", "163"), "084", codigo_provincia),
+         codigo_region = ifelse(codigo_region == "16", "08", codigo_region)) 
+
+zonas_mapa <- mapa_zonas %>% 
+  mutate(codigo_comuna = ifelse(codigo_comuna %in% comunas_nomb$codigo_comuna, 
+                                comunas_nomb$codigo_comuna_2017, codigo_comuna),
+         codigo_provincia = ifelse(codigo_provincia %in% c("161", "162", "163"), "084", codigo_provincia),
+         codigo_region = ifelse(codigo_region == "16", "08", codigo_region),
+         geocod_temp = str_sub(geocodigo, 6, 11)) %>% 
+  unite("geocodigo", codigo_comuna, geocod_temp, sep = "", remove = F)
+
+#ahora debo corregir los geocódigos
+
+```
+
+```{r}
+#censo_descargar()
+
+dat <- 
+  tbl(censo_conectar(), "zonas") %>% 
+  mutate(
+    region = substr(as.character(geocodigo), 1, 2),
+    comuna = substr(as.character(geocodigo), 1, 5),
+    distrito = substr(as.character(geocodigo), 1, 7),
+    distrito_urb = ifelse(substr(as.character(geocodigo), 8, 8) == 1, T, F)
+  ) %>%
+  dplyr::select(region, comuna, geocodigo, zonaloc_ref_id, distrito, distrito_urb) %>%
+  inner_join(dplyr::select(tbl(censo_conectar(), "viviendas"), zonaloc_ref_id, vivienda_ref_id), by = "zonaloc_ref_id") %>%
+  inner_join(dplyr::select(tbl(censo_conectar(), "hogares"), vivienda_ref_id, hogar_ref_id), by = "vivienda_ref_id") %>%
+  inner_join(dplyr::select(tbl(censo_conectar(), "personas"), hogar_ref_id, p09, p15, p15a, escolaridad), by = "hogar_ref_id") %>%
+  filter(escolaridad < 27, #valores mayores son datos perdidos
+         p09 < 100 & p09 > 24, #edad, valores mayores son datos perdidos
+         p15 < 15, #valores mayores son datos perdidos
+         p15a < 3, #valores mayores son datos perdidos
+         distrito_urb == T) %>% 
+  dplyr::rename(edad = p09,
+                nivel_esc = p15,
+                nivel_esc_aprob = p15a) %>% 
+  mutate(escol_bin = ifelse(nivel_esc == 12 & nivel_esc_aprob == 2, "no_superior", 
+                            ifelse(nivel_esc > 11, "superior", "no_superior"))
+         ) %>% 
+  collect()  
+
+censo_desconectar()
+```
+
+```{r message=F, warning=F}
+comunas_nomb <- tbl(censo_conectar(), "comunas") %>% 
+  dplyr::select(redcoden, nom_comuna) %>% 
+  dplyr::rename(codigo_comuna = redcoden) %>% 
+  collect
+
+educ <- dat %>% 
+  group_by(region, comuna, distrito, geocodigo, escol_bin) %>% 
+  summarise(n = n()) %>%  
+  group_by(geocodigo) %>% 
+  mutate(total = sum(n),
+         prop = n/total) %>% 
+  ungroup()
+
+educ <- mapa_zonas %>% 
+  left_join(educ, by = c("geocodigo")) %>% 
+  mutate(area_m2 = st_area(geometry),
+         area_km2 = as.numeric(st_area(geometry)/1e6),
+         cent_zona = st_centroid(geometry)) %>% 
+  group_by(codigo_comuna) %>% 
+  mutate(cent_com = st_centroid(st_union(geometry)),
+         zona_cent = st_contains(geometry, cent_com, sparse = F)[,1],
+         dist_cent = st_distance(cent_com, cent_zona)[1,], 
+         dist_cent = ifelse(zona_cent == T, 0, dist_cent))
+  
+educ <- mapa_comunas %>% 
+  mutate(geometry_com = geometry) %>% 
+  dplyr::select(codigo_comuna, geometry_com) %>% 
+  left_join(educ, by = c("codigo_comuna")) %>% 
+  left_join(comunas_nomb, by = "codigo_comuna") %>% 
+  ungroup()
+  
+educ <- educ[complete.cases(educ[, c("region", "comuna", "n")]), ]
+
+#rm(dat)
+```
+
+```{r eval = F}
+save(educ, file = "DB nedu zona censal mayores25.RData")
+load("DB nedu zona censal mayores25.RData")
+```
+
+
+
+# Indexes
+
+## Uneveness
+
+```{r DISSIMILARITY}
+diss <- function(data){
+  x <- data %>% dplyr::select(n, escol_bin, geocodigo) %>% 
+    pivot_wider(id_cols = geocodigo, values_from = n, names_from = escol_bin) %>% 
+    dplyr::select(superior, no_superior)
+  
+  diss <- OasisR::DIDuncan(x = x)
+  
+  return(diss[2,1])
+}
+
+#diss(data)
+```
+
+```{r GINI}
+gini <- function(data){
+  x <- data %>% dplyr::select(n, escol_bin, geocodigo) %>% 
+    pivot_wider(id_cols = geocodigo, values_from = n, names_from = escol_bin) %>% 
+    dplyr::select(superior, no_superior)
+  
+  gini <- OasisR::Gini(x = x)
+  
+  return(gini[1])
+}
+
+#gini(educ_indep)
+```
+
+```{r ENTROPY}
+entro <- function(data){
+  x <- data %>% dplyr::select(n, escol_bin, geocodigo) %>% 
+    pivot_wider(id_cols = geocodigo, values_from = n, names_from = escol_bin) %>% 
+    dplyr::select(superior, no_superior)
+  
+  entro <- OasisR::HTheil(x = x)
+  
+  return(entro[1])
+}
+
+#entro(educ_indep)
+```
+
+```{r ATKINSON}
+atkin <- function(data, b){
+  x <- data %>% dplyr::select(n, escol_bin, geocodigo) %>% 
+    pivot_wider(id_cols = geocodigo, values_from = n, names_from = escol_bin) %>% 
+    dplyr::select(superior, no_superior)
+  
+  atkin <- OasisR::Atkinson(x = x, delta = b)
+  
+  return(atkin[1])
+}
+
+#atkin(educ_indep, b = .1)
+#atkin(educ_indep, b = .5)
+#atkin(educ_indep, b = .9)
+```
+
+## Exposure
+
+```{r INTERACTION}
+xpy <- function(data){
+  x <- data %>% dplyr::select(n, escol_bin, geocodigo) %>% 
+    pivot_wider(id_cols = geocodigo, values_from = n, names_from = escol_bin) %>% 
+    dplyr::select(superior, no_superior)
+  
+  xpy <- OasisR::xPy(x = x)
+  
+  return(xpy[1,2])
+}
+
+#xpy(educ_indep)
+```
+
+```{r ISOLATION, message=F}
+xpx <- function(data){
+  x <- data %>% dplyr::select(n, escol_bin, geocodigo) %>% 
+    pivot_wider(id_cols = geocodigo, values_from = n, names_from = escol_bin) %>% 
+    dplyr::select(superior, no_superior)
+  
+  xpx <- OasisR::xPx(x = x)
+  
+  return(xpx[1])
+}
+
+#xpx(educ_indep)
+```
+
+```{r CORRELATION}
+eta2 <- function(data){
+  x <- data %>% dplyr::select(n, escol_bin, geocodigo) %>% 
+    pivot_wider(id_cols = geocodigo, values_from = n, names_from = escol_bin) %>% 
+    dplyr::select(superior, no_superior)
+  
+  eta2 <- OasisR::Eta2(x = x)
+  
+  return(eta2[1])
+}
+
+#eta2(educ_indep)
+```
+
+## Concentration
+
+```{r DELTA}
+delta <- function(data){
+  x <- data %>% dplyr::select(n, escol_bin, geocodigo, area_km2) %>% 
+    pivot_wider(id_cols = c(geocodigo, area_km2), values_from = n, names_from = escol_bin) %>% 
+    dplyr::select(superior, no_superior, area_km2)
+  x <- x[complete.cases(x), ]
+  a <- x$area_km2
+  x <- x %>% dplyr::select(superior, no_superior)
+  
+  delta <- OasisR::Delta(x = x, a = a)
+  
+  return(delta[1])
+}
+
+#delta(educ_indep)
+```
+
+```{r ABSOLUTE CONCENTRATION}
+aco <- function(data){
+  x <- data %>% dplyr::select(n, escol_bin, geocodigo, area_km2) %>% 
+    pivot_wider(id_cols = c(geocodigo, area_km2), values_from = n, names_from = escol_bin) %>% 
+    dplyr::select(superior, no_superior, area_km2)
+  x <- x[complete.cases(x), ]
+  a <- x$area_km2
+  x <- x %>% dplyr::select(superior, no_superior)
+  
+  aco <- OasisR::ACO(x = x, a = a)
+  
+  if (aco[1] >= 0 & aco[1] <= 1) {
+    return(aco[1])
+    
+    } else {NA}
+  
+}
+
+#aco(educ_indep)
+
+# data = educ[educ$comuna == "05702",]
+# data = educ[educ$comuna == "07104",]
+```
+
+```{r RELATIVE CONCENTRATION}
+rco <- function(data){
+  x <- data %>% dplyr::select(n, escol_bin, geocodigo, area_km2) %>% 
+    pivot_wider(id_cols = c(geocodigo, area_km2), values_from = n, names_from = escol_bin) %>% 
+    dplyr::select(superior, no_superior, area_km2)
+  x <- x[complete.cases(x), ]
+  a <- x$area_km2
+  x <- x %>% dplyr::select(superior, no_superior)
+  
+  rco <- OasisR::RCO(x = x, a = a)
+
+  if (rco[2,1] >= -1 & rco[2,1] <= 1) {
+    return(rco[2,1])
+    
+  } else {NA}
+
+}
+
+#rco(educ_indep)
+```
+
+
+## Centralization
+
+```{r PROPORTION IN CENTRAL CITY}
+# Esta función es problemática: hay casos en que el centroide de las zonas censales no coincide con
+# ninguna zona central. Pasa en comunas con varias zonas urbanas distantes entre ellas, ya que las zonas 
+# censales crubren solamente áreas pobladas. En estos casos, no existe la variable Xcc (zona censal que
+# coincide con el centroide) y por lo tanto no se puede estimar Pcc. Para ver un ejemplo, mapear la
+# comuna "14108"
+
+pcc <- function(data){
+  data <- data[data$escol_bin == "superior",]
+  X <- sum(data$n)
+  Xcc <- data[data$zona_cent == T, "n"]
+  
+  pcc <- as.numeric(Xcc/X)
+  
+  return(round(pcc, digits = 4))
+}
+
+#pcc(educ)
+```
+
+```{r ABSOLUTE CENTRALIZATION}
+ace <- function(data){
+  x <- data %>% dplyr::select(n, escol_bin, geocodigo) %>% 
+    pivot_wider(id_cols = geocodigo, values_from = n, names_from = escol_bin) %>% 
+    dplyr::select(superior, no_superior)
+  a <- data$area_km2
+  dc <- data$dist_cent / 1e3
+  center <- data %>% dplyr::select(zona_cent) %>% mutate(id = 1:nrow(data)) %>% filter(zona_cent == T) %>% dplyr::select(id)
+
+  ace <- OasisR::ACE(x = x, a = a, dc = dc, center = center)
+  
+  return(ace[1])
+}
+
+#ace(educ)
+```
+
+```{r RELATIVE CENTRALIZATION}
+rce <- function(data){
+  
+    if(nrow(dat) > 4) {
+      
+      x <-  data %>% dplyr::select(n, escol_bin, geocodigo) %>% 
+            pivot_wider(id_cols = geocodigo, values_from = n, names_from = escol_bin) %>% 
+            dplyr::select(superior, no_superior) 
+      x <- x[complete.cases(x),]
+      dc <- data$dist_cent / 1e3
+      center <- data %>% dplyr::select(zona_cent) %>% mutate(id = 1:nrow(data)) %>% 
+                filter(zona_cent == T) %>% dplyr::select(id)
+
+      rce <- OasisR::RCE(x = x, dc = dc, center = center)
+  
+      return(rce[2,1])
+  
+  } else {NA}
+# se eliminan las comunas que tienen 2 zonas censales o menos, debido a que 
+# requiere de al menos 3 de ellas para ejecutarse
+  
+}
+
+#rce(educ_indep)
+```
+
+
+## Clustering
+
+```{r ABSOLUTE CLUSTERING}
+acl <- function(data){
+  dij_data <- data %>% filter(escol_bin == "superior") 
+  dij <- st_distance(dij_data$cent_zona, dij_data$cent_zona) /1e3
+  attributes(dij)$class <- NULL
+  diag(dij) <- sqrt(.6*dij_data$area_km2)
+  x <- data %>% dplyr::select(n, escol_bin, geocodigo) %>% 
+    pivot_wider(id_cols = geocodigo, values_from = n, names_from = escol_bin) %>% 
+    dplyr::select(superior, no_superior)
+
+  acl <- OasisR::ACL(x = x, spatmat = "d", d = dij, distin = "km")
+  
+  return(acl[1])
+}
+
+#acl(educ_indep)
+```
+
+```{r SPATIAL PROXIMITY}
+sp <- function(data){
+  dij_data <- data %>% filter(escol_bin == "superior") 
+  dij <- st_distance(dij_data$cent_zona, dij_data$cent_zona) /1e3
+  attributes(dij)$class <- NULL
+  diag(dij) <- sqrt(.6*dij_data$area_km2)
+  x <- data %>% dplyr::select(n, escol_bin, geocodigo) %>% 
+    pivot_wider(id_cols = geocodigo, values_from = n, names_from = escol_bin) %>% 
+    dplyr::select(superior, no_superior)
+
+  sp <- OasisR::SP(x = x, d = dij, fdist = "e", distin = "km")
+  
+  return(sp)
+}
+
+#sp(educ_indep)
+```
+
+```{r RELATIVE CLUSTERING}
+rcl <- function(data){
+  dij_data <- data %>% filter(escol_bin == "superior") 
+  dij <- st_distance(dij_data$cent_zona, dij_data$cent_zona) /1e3
+  attributes(dij)$class <- NULL
+  diag(dij) <- sqrt(.6*dij_data$area_km2*1000)
+  x <- data %>% dplyr::select(n, escol_bin, geocodigo) %>% 
+    pivot_wider(id_cols = geocodigo, values_from = n, names_from = escol_bin) %>% 
+    dplyr::select(superior, no_superior)
+
+  rcl <- OasisR::RCL(x = x, d = dij, fdist = "e", distin = "km")
+  
+  return(rcl[2,1])
+}
+
+#rcl(educ_indep)
+```
+
+```{r DISTANCE DECAY INTERACTION}
+dpxy <- function(data){
+  dij_data <- data %>% filter(escol_bin == "superior") 
+  dij <- st_distance(dij_data$cent_zona, dij_data$cent_zona) /1e3
+  attributes(dij)$class <- NULL
+  diag(dij) <- sqrt(.6*dij_data$area_km2)
+  x <- data %>% dplyr::select(n, escol_bin, geocodigo) %>% 
+    pivot_wider(id_cols = geocodigo, values_from = n, names_from = escol_bin) %>% 
+    dplyr::select(superior, no_superior)
+
+  dpxy <- OasisR::DPxy(x = x, d = dij, distin = "km")
+  
+  return(dpxy[2,1]) #revisar si es el valor correcto
+}
+
+#dpxy(educ_indep)
+```
+
+```{r DISTANCE DECAY ISOLATION}
+dpxx <- function(data){
+  dij_data <- data %>% filter(escol_bin == "superior") 
+  dij <- st_distance(dij_data$cent_zona, dij_data$cent_zona) /1e3
+  attributes(dij)$class <- NULL
+  diag(dij) <- sqrt(.6*dij_data$area_km2)
+  x <- data %>% dplyr::select(n, escol_bin, geocodigo) %>% 
+    pivot_wider(id_cols = geocodigo, values_from = n, names_from = escol_bin) %>% 
+    dplyr::select(superior, no_superior)
+
+  dpxx <- OasisR::DPxx(x = x, d = dij, distin = "km")
+  
+  return(dpxx[1])
+}
+
+#dpxx(educ_indep)
+```
+
+
+## All indexes
+
+```{r FUNCTION ALL INDICES, message=F, warning=F}
+index <- function(data, b1, b2, b3){
+  
+  rows <- 
+  # Uneveness
+    list(
+     diss(data),     # 1
+     gini(data),     # 2
+     entro(data),    # 3
+     atkin(data, b1),# 4
+     atkin(data, b2),# 5
+     atkin(data, b3),# 6
+  # Exposure
+     xpy(data),      # 7
+     xpx(data),      # 8
+     eta2(data),     # 9
+  # Concentration
+     delta(data),    #10
+     aco(data),      #11
+     rco(data),      #12
+  # Centralization
+     pcc(data),      #13
+     ace(data),      #14
+     rce(data),      #15
+  # Clustering
+     acl(data),      #16
+     sp(data),       #17
+     rcl(data),      #18
+     dpxy(data),     #19
+     dpxx(data)      #20
+    )
+  
+  return(unlist(rows))
+}     
+```
+
+# Results
+
+```{r RUN ALL INDEXEX, message=F, warning=F}
+res <- matrix(nrow = length(unique(droplevels(as.factor(educ$codigo_comuna)))),
+              ncol = 20)
+
+comunas <- levels(droplevels(as.factor(educ$codigo_comuna)))
+
+for (i in 1:length(comunas)){
+  dat <- educ %>% filter(codigo_comuna == comunas[i])
+  
+  if(nrow(dat) > 2) {
+      
+    res[i, ] <- index(dat, .1, .5, .9)  
+  
+  } else {NA}
+# se eliminan las comunas que tienen 1 zona censal, debido a que las funciones
+# requieren de al menos 2 de ellas para ejecutarse
+}
+```
+
+```{r}
+save(res, file = "matriz indices seg mayores25.RData")
+load("matriz indices seg mayores25.RData")
+```
+
+
