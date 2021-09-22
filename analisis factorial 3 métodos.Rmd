@@ -59,10 +59,11 @@ max <- round(as.numeric(lapply(datos, max, na.rm = TRUE)), digits = 4)
 sd <- round(as.numeric(lapply(datos, sd, na.rm = TRUE)), digits = 4)
 skewness <- round(as.numeric(lapply(datos, skewness, na.rm = TRUE)), digits = 4)
 kurtosis <- round(as.numeric(lapply(datos, kurtosis, na.rm = TRUE)), digits = 4)
-n <- nrow(datos) - colSums(is.na(datos)) 
+n <- nrow(datos) - colSums(is.na(datos))
+cv <- sd/mean
   
-tabla <- cbind(indice, nombre, min, mean, median, max, sd, skewness, kurtosis, n)
-colnames(tabla) <- c("Índice", "Nombre", "Mínimo", "Media", "Mediana", "Máximo", "Desviación estándar", "Asimetría", "Curtosis", "Número de comunas")
+tabla <- cbind(indice, nombre, min, mean, median, max, sd, cv, skewness, kurtosis, n)
+colnames(tabla) <- c("Índice", "Nombre", "Mínimo", "Media", "Mediana", "Máximo", "Desviación estándar", "Coef. de variación", "Asimetría", "Curtosis", "Número de comunas")
 rownames(tabla) <- rep("", 20)
 
 knitr::kable(tabla)
