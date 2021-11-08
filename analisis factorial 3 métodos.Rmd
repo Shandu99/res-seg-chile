@@ -1,9 +1,9 @@
 ---
 title: "Análisis Factorial de índices de segregación de comunas chilenas"
-output: 
+output: html_document
 ---
 
-```{r message=F, warning=F}
+```{r message=FALSE, warning=FALSE, include=FALSE}
 rm(list = ls()); gc()
 library(tidyverse)
 library(psych)
@@ -14,7 +14,7 @@ library("relimp", pos = 4)
 
 # Datos
 
-```{r}
+```{r include=FALSE}
 load("matriz indices seg mayores25.RData")
 load("DB nedu zona censal mayores25.RData")
 comunas <- levels(as.factor(educ$comuna))
@@ -145,7 +145,7 @@ pm.VCEF5 <- fa.promax$values[5]/sum(fa.promax$communalities) ## % var comun expl
 # Compute SS loadings
 SS <- colSums(fa.promax$Structure^2)
 # Compute percentage of explained variance by factor
-(SS/length(fa.promax$communality) *100) %>% round(1)
+(SS/sum(fa.promax$communality) *100) %>% round(1)
 # Total explained variability
 mean(fa.promax$communality)
 ```
@@ -169,6 +169,11 @@ tabla.promax <- cbind(round(fa.promax$loadings, 3), round(fa.promax$communality,
 colnames(tabla.promax) <- c("Factor 1", "Factor 2", "Factor 3", "Factor 4", "Factor 5", "Comunalidad")
 
 knitr::kable(tabla.promax)
+
+tabla.promax.str <- round(fa.promax$Structure[1:18, 1:5], 3)
+colnames(tabla.promax.str) <- c("Factor 1", "Factor 2", "Factor 3", "Factor 4", "Factor 5")
+
+knitr::kable(tabla.promax.str)
 ```
 
 ```{r fig.height=8, fig.width=8}
