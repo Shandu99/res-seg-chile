@@ -1,0 +1,137 @@
+---
+title: "Correlación tamaño - zona censal"
+output: 
+---
+
+On Page 10, Lines 27-34 you implicitly refer to the Modifiable Areal Unit Problem (MAUP), which is far from a minor issue with respect to the estimation of segregation indices. Perhaps you might consider performing a regression analysis to evaluate the effect of census tract size/density on segregation indices in order to address this. Or perhaps introduce some spatial indices as I suggested in the previous comment.
+
+
+```{r}
+rm(list = ls()); gc()
+
+library(tidyverse)
+
+load("DB nedu zona censal mayores25.RData")
+load("matriz indices seg mayores25.RData")
+```
+
+```{r}
+res <- as.data.frame(res)
+res$codigo_comuna <- levels(as.factor(educ$codigo_comuna))
+
+pop <- educ %>% 
+  dplyr::select(codigo_comuna, total, area_km2) %>% 
+  group_by(codigo_comuna) %>% 
+  summarise(total = sum(total),
+            area_km2 = sum(area_km2))
+
+res <- res %>% 
+  full_join(pop) %>% 
+  mutate(densidad = total/area_km2)
+
+rm(pop, educ)
+
+colnames(res)[1:20] <- c(  # Uneveness
+     "Dissimilarity",
+     "Giny", 
+     "Entropy", 
+     "Atkinson (b = 0.1)",
+     "Atkinson (b = 0.5)",
+     "Atkinson (b = 0.9)",
+  # Exposure
+     "Interaction",
+     "Isolation",
+     "Correlation", 
+  # Concentration
+     "Delta", 
+     "Absolute concentration",
+     "Relative concentration",
+  # Centralization
+     "Proportion in central city", 
+     "Absolute centralization", 
+     "Relative centralization", 
+  # Clustering
+     "Absolute clustering", 
+     "Spatial proximity", 
+     "Relative clustering", 
+     "Distance decay interaction",
+     "Distance decay isolation" 
+)
+
+```
+
+```{r}
+my_cors <- lapply(1:20, function(x) cor(res[,x], res[, "total"], use = "pairwise.complete.obs"))
+
+my_lms <- lapply(1:20, function(x) lm(res[,x] ~ res[, "total"]))
+
+summaries <- lapply(my_lms, summary)
+
+mods <- data.frame(indice = colnames(res)[1:20],
+                   cor_pob = unlist(my_cors),
+                   coef_pob = sapply(my_lms, coef)[2,],
+                   pval_pob = sapply(summaries, function(x) x$coefficients[2,4]))
+
+mods$test_pob <- mods$pval < 0.05
+```
+
+```{r}
+my_cors <- lapply(1:20, function(x) cor(res[,x], res[, "densidad"], use = "pairwise.complete.obs"))
+
+my_lms <- lapply(1:20, function(x) lm(res[,x] ~ res[, "densidad"]))
+
+summaries <- lapply(my_lms, summary)
+
+mods$cor_dens <- unlist(my_cors)
+mods$coef_dens <- sapply(my_lms, coef)[2,]
+mods$pval_dens <- sapply(summaries, function(x) x$coefficients[2,4])
+mods$test_dens <- mods$pval_dens < 0.05
+
+rm(summaries, my_lms, my_cors)
+```
+
+```{r fig.height=8.5, fig.width=6}
+library(scales)
+library(ggpubr)
+
+ggarrange(
+  
+res %>% 
+  pivot_longer(cols = Dissimilarity:`Distance decay isolation`,
+               names_to = "indice",
+               values_to = "indice_valor") %>% 
+  ggplot(aes(x = total, y = indice_valor)) + 
+  geom_point() +
+  geom_label(data = mods, aes(label = round(cor_pob, 2), y = Inf, x = Inf), 
+             vjust = 1, hjust = 1, size = 2.5) +
+  scale_x_continuous(labels = comma, n.breaks = 4) +
+  theme_minimal(base_size = 8) +
+  theme(axis.text.x = element_text(angle = 45, vjust = .9)) +
+  facet_wrap("indice", scales = "free_y") +
+  labs(title = "Correlation between segregation indices and unit populaton size/density",
+       x = "Population size",
+       y = "Segregation index")
+,
+
+res %>% 
+  pivot_longer(cols = Dissimilarity:`Distance decay isolation`,
+               names_to = "indice",
+               values_to = "indice_valor") %>% 
+  ggplot(aes(x = densidad, y = indice_valor)) + 
+  geom_point() +
+  geom_label(data = mods, aes(label = round(cor_dens, 2), y = Inf, x = Inf), 
+             vjust = 1, hjust = 1, size = 2.5) +
+  scale_x_continuous(labels = comma, n.breaks = 4) +
+  theme_minimal(base_size = 8) +
+  theme(axis.text.x = element_text(angle = 45, vjust = .9)) +
+  facet_wrap("indice", scales = "free_y") +
+  labs(title = "",
+       x = "Population density",
+       y = "Segregation index")
+,
+
+ncol = 1, nrow = 2
+)
+
+```
+
